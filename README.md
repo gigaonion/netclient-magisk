@@ -1,100 +1,67 @@
-<p align="center">
-  <a href="https://netmaker.io">
-  <img src="./netclient.png" width="50%"><break/>
-  </a>
-</p>
+# netclient-magisk
 
-<p align="center">
-  <a href="https://github.com/gravitl/netmaker/releases">
-    <img src="https://img.shields.io/badge/Version-1.6.0-informational?style=flat-square" />
-  </a>
-  <a href="https://hub.docker.com/r/gravitl/netclient/tags">
-    <img src="https://img.shields.io/docker/pulls/gravitl/netclient?label=downloads" />
-  </a>
-  <a href="https://goreportcard.com/report/github.com/gravitl/netclient">
-    <img src="https://goreportcard.com/badge/github.com/gravitl/netclient" />
-  </a>
-</p>
+root化されたAndroid環境において，NetmakerのP2Pメッシュネットワーククライアントである`netclient`を自律的なシステムデーモンとして稼働させるためのモジュール実装です．
 
-# Automated WireGuard® Management Client
+標準Linux向け実装が依存するネットワーク管理機構を排除し，Androidの`netd`制約をバイパスする専用のポリシーベースルーティングおよびSplit DNSをカーネルレベルで直接制御します．
 
-This is the client for Netmaker networks. To learn more about Netmaker, [see here](http://github.com/gravitl/netmaker).
+> [!IMPORTANT]
+> 前提条件とカーネル仕様
+> - OS / 権限: Android 16 (KernelSUまたはMagisk導入済み環境)
+> - カーネル: Linux Kernel 5.6+
+> - 認証モデル: ブラウザベースのOIDC認証は無効化されており，Enrollment Tokenによる登録のみをサポートします．
 
-## Installation
+> [!NOTE]
+> 永続化パスについて
+> Androidのファイルシステム構造に合わせて，設定ファイル，鍵ペア，およびログはすべて`/data/adb/netclient/`に保存されます．
 
-[https://docs.netmaker.io/docs/client-installation/netclient#installation](https://docs.netmaker.io/docs/client-installation/netclient#installation)
+---
 
-## Usage
+## 使い方
 
-[https://docs.netmaker.io/docs/client-installation/netclient#managing-netclient__joining-a-network](https://docs.netmaker.io/docs/client-installation/netclient#managing-netclient__joining-a-network)
+モジュールをフラッシュして，Enrollment-Tokenを保存すれば，通常のNetmakerと同様に動作します．
 
-## Join a network
+### WebUIから登録する
+1. KernelSU / Magiskアプリのモジュール一覧からNetmaker ClientのWebUIを開きます．
+2. Netmakerサーバー管理画面で発行したEnrollment Tokenを入力し，「登録実行」を押します．
 
-With Token:
-`netclient join -t <token>`
+### CLIから登録する
+```bash
+su -c netclient register -t "<Enrollment-Token>"
+```
 
-With User (Basic Auth):
-`netclient join -n <net name> -u <username> -s api.<netmaker domain>`
+### 状態の確認
 
-With User (SSO):
-`netclient join -n <net name> -s api.<netmaker domain>`
-
-## Interface Exclusion
-
-Netclient excludes certain interfaces from being advertised to peers. By default, the following patterns are excluded: `docker`, `netmaker`, `flannel`, `cni`, and bridge networks.
-
-You can customize excluded interfaces using the `NETCLIENT_EXCLUDE_INTERFACES` environment variable:
+KernelSUアプリのモジュール詳細画面でActionボタンを押すと，現在のデーモン稼働状態，WireGuardインターフェース，PBRテーブル（Table 1000），および優先度ルール（pref 99）が出力されます．
 
 ```bash
-NETCLIENT_EXCLUDE_INTERFACES=flannel,cni,calico,weave
+# 手動でステータスを確認する場合
+su -c /data/adb/modules/netclient-magisk/action.sh
 ```
 
-- Comma-separated list of interface name patterns (substring match)
-- Default (if not set): `flannel,cni`
+---
 
-## Commands
-```
-Netmaker's netclient agent and CLI to manage wireguard networks
+## ビルド方法
 
-Join, leave, connect and disconnect from netmaker wireguard networks.
+### 必要環境
+- Go 1.22+
+- `zip` コマンド
 
-Usage:
-  netclient [command]
+```bash
+./scripts/build_module.sh
 
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  connect     connect to a netmaker network
-  daemon      netclient daemon
-  disconnect  disconnet from a network
-  help        Help about any command
-  install     install netclient binary and daemon
-  join        join a network
-  leave       leave a network
-  list        display list of netmaker networks
-  pull        get the latest node configuration
-  uninstall   uninstall netclient
-  version     Displays version information
-
-Flags:
-      --config string   use specified config file
-  -h, --help            help for netclient
-  -v, --verbosity int   set logging verbosity 0-4
-
-Use "netclient [command] --help" for more information about a command.
+# 出力先: dist/netclient-magisk.zip
 ```
 
-## TCP uplink (server-driven)
+---
 
-When the Netmaker control plane enables TCP uplink:
+## ライセンス&謝辞
 
-- **Gateway** (`tcp_proxy_enabled`): netclient listens with TLS for framed WireGuard uplinks (`tcp_proxy_listen_port`, default 443). Uses a local self-signed cert under the netclient config directory.
-- **Assigned node** (`use_tcp_uplink`): netclient dials the gateway’s `tcp_proxy_endpoint` from peer updates and carries WireGuard ciphertext over TCP/TLS instead of UDP to that gateway.
+### ライセンス
+本リポジトリ内のコードは[Apache License 2.0](./LICENSE)のもとで公開されています．
 
-On Linux this forces **userspace WireGuard** so traffic can be diverted via `conn.Bind`. Windows TCP uplink Bind is not supported yet.
+本プロジェクトは[Gravitl / Netclient](https://github.com/gravitl/netclient)（Copyright Gravitl, Inc.）をフォーク・改変したものであり，Apache License 2.0のライセンス条項に基づき，Android環境向けにソースコードおよびネットワーク制御機構の変更を行っています．改変内容の詳細はコミット履歴をご参照ください．
 
-## Disclaimer
- [WireGuard](https://wireguard.com/) is a registered trademark of Jason A. Donenfeld.
-
-## License
-
-Netclient's source code and all artifacts in this repository are freely available under the Apache 2.0 License, which can be found here: [LICENSE.txt](./LICENSE.txt).
+### 謝辞
+本プロジェクトは以下のオープンソースソフトウェアを利用・改変して作成されています．
+- [Gravitl / Netclient](https://github.com/gravitl/netclient) - Gravitl, Inc.
+- [WireGuard](https://www.wireguard.com/) - Jason A. Donenfeld
