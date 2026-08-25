@@ -1,0 +1,17 @@
+#!/sbin/sh
+##########################################################################################
+#
+# Magisk / KernelSU General Installer
+#
+##########################################################################################
+OUTFD=$2
+ZIPFILE=$3
+
+# Extract and source util_functions.sh from Magisk / KernelSU / APatch
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+    . /data/adb/magisk/util_functions.sh
+elif [ -f /data/adb/ksu/bin/util_functions.sh ]; then
+    . /data/adb/ksu/bin/util_functions.sh
+elif [ -f /data/adb/ap/bin/util_functions.sh ]; then
+    . /data/adb/ap/bin/util_functions.sh
+fi

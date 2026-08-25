@@ -1,0 +1,71 @@
+body {
+  font-family: monospace;
+  font-size: 13px;
+  background: #ffffff;
+  color: #000000;
+  margin: 10px;
+  padding: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #000000;
+    color: #ffffff;
+  }
+  input, textarea, button, pre {
+    background: #000000;
+    color: #ffffff;
+    border-color: #ffffff;
+  }
+}
+
+h1 {
+  font-size: 16px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 4px;
+}
+
+h2 {
+  font-size: 14px;
+  margin: 12px 0 6px 0;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  margin-right: 4px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+input[type="text"], textarea {
+  font-family: inherit;
+  font-size: 13px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  margin: 4px 0;
+}
+
+textarea {
+  min-height: 70px;
+}
+
+pre {
+  border: 1px solid currentColor;
+  padding: 8px;
+  min-height: 80px;
+  max-height: 300px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid currentColor;
+  margin: 14px 0;
+}

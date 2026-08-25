@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Netclient</title>
+  <link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+  <h1>Netclient</h1>
+
+  <h2>デーモン操作</h2>
+  <div>
+    <button id="btn-start">起動</button>
+    <button id="btn-restart">再起動 (SIGHUP)</button>
+    <button id="btn-stop">停止</button>
+    <button id="btn-reapply">DNS/PBR再適用</button>
+  </div>
+
+  <hr>
+
+  <!-- Join / Register -->
+  <h2>ネットワーク登録 (Token)</h2>
+  <textarea id="token-input" placeholder="Enrollment Token を入力..."></textarea>
+  <div>
+    <button id="btn-register">登録実行 (netclient register -t)</button>
+  </div>
+
+  <hr>
+
+  <!-- Leave Network -->
+  <h2>ネットワーク離脱</h2>
+  <input type="text" id="leave-input" placeholder="離脱するネットワーク名">
+  <div>
+    <button id="btn-leave">離脱実行 (netclient leave -n)</button>
+  </div>
+
+  <!-- Home Wi-Fi Bypass -->
+  <h2>宅内Wi-Fiバイパス設定</h2>
+  <div style="margin-bottom: 8px;">
+    <label style="display: block; font-size: 13px; margin-bottom: 4px;">自宅Wi-Fi SSID (カンマ区切り):</label>
+    <input type="text" id="bypass-ssids">
+  </div>
+  <div style="margin-bottom: 8px;">
+    <label style="display: block; font-size: 13px; margin-bottom: 4px;">バイパス対象サブネット (カンマ区切り):</label>
+    <input type="text" id="bypass-subnets">
+  </div>
+  <div>
+    <button id="btn-save-bypass">バイパス設定を保存・適用</button>
+  </div>
+
+  <hr>
+
+  <!-- Command Result Output -->
+  <h2>実行ログ / 出力</h2>
+  <pre id="output-view">-</pre>
+
+  <script src="app.js?v=4"></script>
+</body>
+</html>
