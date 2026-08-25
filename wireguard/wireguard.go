@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/gravitl/netclient/cache"
 	"github.com/gravitl/netclient/config"
@@ -216,6 +217,11 @@ func SetPeers(replace bool) error {
 		if !peer.Remove && checkIfEgressHAPeer(&peer, data) {
 			peers[i] = peer
 		}
+		if !peer.Remove && (peer.PersistentKeepaliveInterval == nil || *peer.PersistentKeepaliveInterval == 0) {
+			keepalive := 20 * time.Second
+			peer.PersistentKeepaliveInterval = &keepalive
+			peers[i] = peer
+		}
 
 	}
 
@@ -267,6 +273,36 @@ func apply(c *wgtypes.Config) error {
 }
 
 // returns if better endpoint has been calculated for this peer already
+func isLocalIPReachable(targetIP net.IP) bool {
+	if targetIP == nil {
+		return false
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return true
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if iface.Name == ncutils.GetInterfaceName() {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok {
+				if ipNet.Contains(targetIP) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // if so sets it and returns true
 func checkForBetterEndpoint(peer *wgtypes.PeerConfig) bool {
 	if peer == nil {
@@ -278,10 +314,14 @@ func checkForBetterEndpoint(peer *wgtypes.PeerConfig) bool {
 	if endpoint, ok := cache.EndpointCache.Load(peer.PublicKey.String()); ok && endpoint != nil {
 		var cacheEndpoint cache.EndpointCacheValue
 		cacheEndpoint, ok = endpoint.(cache.EndpointCacheValue)
-		if ok {
+		if ok && cacheEndpoint.Endpoint != nil && cacheEndpoint.Endpoint.IP != nil {
+			if cacheEndpoint.Endpoint.IP.IsPrivate() && !isLocalIPReachable(cacheEndpoint.Endpoint.IP) {
+				cache.EndpointCache.Delete(peer.PublicKey.String())
+				return false
+			}
 			peer.Endpoint = cacheEndpoint.Endpoint
+			return true
 		}
-		return ok
 	}
 	return false
 }
@@ -290,7 +330,11 @@ func GetBetterEndpoint(peerKey string) (*net.UDPAddr, bool) {
 	if endpoint, ok := cache.EndpointCache.Load(peerKey); ok && endpoint != nil {
 		var cacheEndpoint cache.EndpointCacheValue
 		cacheEndpoint, ok = endpoint.(cache.EndpointCacheValue)
-		if ok {
+		if ok && cacheEndpoint.Endpoint != nil && cacheEndpoint.Endpoint.IP != nil {
+			if cacheEndpoint.Endpoint.IP.IsPrivate() && !isLocalIPReachable(cacheEndpoint.Endpoint.IP) {
+				cache.EndpointCache.Delete(peerKey)
+				return nil, false
+			}
 			return cacheEndpoint.Endpoint, ok
 		}
 	}
