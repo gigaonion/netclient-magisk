@@ -118,8 +118,6 @@ func (nc *NCIface) closeUserspaceWg() error {
 	if cfg := config.Netclient(); cfg != nil {
 		listenPort = cfg.ListenPort
 	}
-	fmt.Println("[listen-port-debug] closeUserspaceWg: start",
-		"iface=", nc.Name, "listenPort=", listenPort)
 	slog.Debug("Closing userspace WireGuard interface", "interface", nc.Name)
 
 	// Belt-and-suspenders if caller skipped StopAllTCPUplink.
@@ -134,7 +132,6 @@ func (nc *NCIface) closeUserspaceWg() error {
 	}
 	if tunDevice != nil {
 		done := make(chan struct{})
-		closeStart := time.Now()
 		go func(dev *device.Device) {
 			dev.Close()
 			close(done)
@@ -142,17 +139,9 @@ func (nc *NCIface) closeUserspaceWg() error {
 		tunDevice = nil
 		select {
 		case <-done:
-			fmt.Println("[listen-port-debug] closeUserspaceWg: Device.Close done",
-				"elapsed=", time.Since(closeStart),
-				"portFree=", portFreeDebug(listenPort))
 		case <-time.After(15 * time.Second):
-			fmt.Println("[listen-port-debug] closeUserspaceWg: Device.Close TIMEOUT",
-				"elapsed=", time.Since(closeStart),
-				"portFree=", portFreeDebug(listenPort))
 			slog.Error("userspace WireGuard Device.Close timed out; continuing shutdown")
 		}
-	} else {
-		fmt.Println("[listen-port-debug] closeUserspaceWg: tunDevice was nil")
 	}
 	relayBindMu.Lock()
 	relayBind = nil
@@ -167,16 +156,12 @@ func (nc *NCIface) closeUserspaceWg() error {
 	select {
 	case <-waitDone:
 	case <-time.After(3 * time.Second):
-		fmt.Println("[listen-port-debug] closeUserspaceWg: UAPI accept loop wait TIMEOUT")
 		slog.Warn("userspace WireGuard UAPI accept loop wait timed out")
 	}
 
 	// Ensure the previous UDP listen port is released before callers run GetFreePort.
 	if listenPort > 0 {
-		waitStart := time.Now()
 		ok := waitUDPPortFree(listenPort, 5*time.Second)
-		fmt.Println("[listen-port-debug] closeUserspaceWg: after port wait",
-			"port=", listenPort, "free=", ok, "waited=", time.Since(waitStart))
 		if !ok {
 			slog.Warn("WireGuard UDP listen port still busy after Device.Close", "port", listenPort)
 		}

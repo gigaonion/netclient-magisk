@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/gravitl/netclient/config"
@@ -15,11 +16,14 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/exp/slog"
 	"golang.org/x/sys/unix"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 const (
 	RouteTableName    = 111
 	EgressRouteMetric = 256
+	PBRTable          = 1000
+	PBRPref           = 99
 )
 
 // useKernelWireGuard prefers kernel WG unless TCP uplink needs userspace conn.Bind.
@@ -124,12 +128,12 @@ func (l *netLink) Type() string {
 
 // NCIface.Close closes netmaker interface
 func (n *NCIface) Close() {
+	FlushPBR(n.Name)
 	// Tear down the iface that is actually running — not the *desired* mode.
 	// prepareTCPUplinkWireGuard may already have flipped needTCPUplinkBind before
 	// SIGHUP; consulting useKernelWireGuard() here skips LinkDel and leaves the
 	// kernel UDP listen port busy (GetFreePort then bumps 51821→51822).
 	if UserspaceWGActive() {
-		fmt.Println("[listen-port-debug] Close: userspace path")
 		n.closeUserspaceWg()
 		// Best-effort remove leftover TUN/link name so kernel WG can recreate it.
 		if l, err := netlink.LinkByName(n.Name); err == nil && l != nil {
@@ -138,16 +142,11 @@ func (n *NCIface) Close() {
 		return
 	}
 	if l, err := netlink.LinkByName(n.Name); err == nil && l != nil {
-		fmt.Println("[listen-port-debug] Close: deleting netlink iface",
-			"name=", n.Name, "type=", l.Type(),
-			"desiredUserspace=", relayTCPUserspaceNeeded())
 		if err := netlink.LinkDel(l); err != nil {
 			slog.Warn("failed to delete netmaker link on Close", "error", err)
 		}
 		return
 	}
-	fmt.Println("[listen-port-debug] Close: no userspace device and no netlink iface",
-		"name=", n.Name, "desiredUserspace=", relayTCPUserspaceNeeded())
 }
 
 // netLink.Close - required function to close linux interface
@@ -172,86 +171,270 @@ func (nc *NCIface) ApplyAddrs() error {
 	}
 
 	for i := range routes {
-		err = netlink.RouteDel(&routes[i])
-		if err != nil {
-			return fmt.Errorf("failed to list routes %w", err)
-		}
+		_ = netlink.RouteDel(&routes[i])
 	}
 
 	if len(currentAddrs) > 0 {
 		for i := range currentAddrs {
-			err = netlink.AddrDel(l, &currentAddrs[i])
-			if err != nil {
-				return fmt.Errorf("failed to delete route %w", err)
-			}
+			_ = netlink.AddrDel(l, &currentAddrs[i])
 		}
 	}
 
 	for _, addr := range nc.Addresses {
-		if addr.IP != nil && addr.Network.IP != nil {
+		if addr.IP != nil {
+			mask := addr.Network.Mask
+			if mask == nil {
+				mask = net.CIDRMask(32, 32)
+			}
 			slog.Info("adding address", "address", addr.IP.String(), "network", addr.Network.String())
-			if err := netlink.AddrAdd(l, &netlink.Addr{IPNet: &net.IPNet{IP: addr.IP, Mask: addr.Network.Mask}}); err != nil {
+			if err := netlink.AddrAdd(l, &netlink.Addr{IPNet: &net.IPNet{IP: addr.IP, Mask: mask}}); err != nil {
 				slog.Warn("error adding addr", "error", err.Error())
 			}
+			subnet := addr.Network.String()
+			if addr.Network.IP == nil {
+				subnet = (&net.IPNet{IP: addr.IP.Mask(mask), Mask: mask}).String()
+			}
+			if subnet != "" && subnet != "<nil>" {
+				AddPBRRoute(subnet, nc.Name)
+			}
 		}
-
 	}
+	// Apply loose reverse path filtering and iptables accept for Android
+	_, _ = ncutils.RunCmd(fmt.Sprintf("sysctl -w net.ipv4.conf.%s.rp_filter=2", nc.Name), false)
+	_, _ = ncutils.RunCmd("sysctl -w net.ipv4.conf.all.rp_filter=2", false)
+	_, _ = ncutils.RunCmd(fmt.Sprintf("iptables -I INPUT 1 -i %s -j ACCEPT", nc.Name), false)
+	_, _ = ncutils.RunCmd(fmt.Sprintf("iptables -I OUTPUT 1 -o %s -j ACCEPT", nc.Name), false)
 	return nil
+}
+
+var pbrTrackedRoutes = struct {
+	sync.Mutex
+	routes map[string]struct{}
+}{
+	routes: make(map[string]struct{}),
+}
+
+func isIPv6(subnet string) bool {
+	return strings.Contains(subnet, ":")
+}
+
+// AddPBRRoute adds a route to table 1000 and a rule with pref 99 for subnet using Netlink directly.
+func AddPBRRoute(subnet string, iface string) error {
+	if subnet == "" || subnet == IPv4Network || subnet == IPv6Network {
+		return nil
+	}
+	ifaceName := iface
+	if ifaceName == "" {
+		ifaceName = ncutils.GetInterfaceName()
+	}
+
+	_, ipnet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		ip := net.ParseIP(subnet)
+		if ip == nil {
+			return err
+		}
+		if ip.To4() != nil {
+			ipnet = &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+		} else {
+			ipnet = &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+		}
+	}
+
+	pbrTrackedRoutes.Lock()
+	pbrTrackedRoutes.routes[subnet] = struct{}{}
+	pbrTrackedRoutes.Unlock()
+
+	link, err := netlink.LinkByName(ifaceName)
+	if err != nil {
+		return err
+	}
+
+	family := unix.AF_INET
+	if isIPv6(subnet) {
+		family = unix.AF_INET6
+	}
+
+	// 1. Add route to table 1000 via Netlink
+	route := &netlink.Route{
+		LinkIndex: link.Attrs().Index,
+		Dst:       ipnet,
+		Table:     PBRTable,
+		Scope:     netlink.SCOPE_LINK,
+	}
+	if err := netlink.RouteReplace(route); err != nil {
+		slog.Warn("netlink RouteReplace failed", "subnet", subnet, "error", err)
+	}
+
+	// 2. Add rule with pref 99 via Netlink
+	rule := netlink.NewRule()
+	rule.Family = family
+	rule.Dst = ipnet
+	rule.Table = PBRTable
+	rule.Priority = PBRPref
+	_ = netlink.RuleDel(rule)
+	if err := netlink.RuleAdd(rule); err != nil && !os.IsExist(err) {
+		slog.Warn("netlink RuleAdd failed", "subnet", subnet, "error", err)
+	}
+
+	return nil
+}
+
+// RemovePBRRoute removes the table 1000 route and pref 99 rule for subnet using Netlink.
+func RemovePBRRoute(subnet string, iface string) error {
+	if subnet == "" || subnet == IPv4Network || subnet == IPv6Network {
+		return nil
+	}
+	ifaceName := iface
+	if ifaceName == "" {
+		ifaceName = ncutils.GetInterfaceName()
+	}
+
+	_, ipnet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		ip := net.ParseIP(subnet)
+		if ip == nil {
+			return err
+		}
+		if ip.To4() != nil {
+			ipnet = &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)}
+		} else {
+			ipnet = &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
+		}
+	}
+
+	pbrTrackedRoutes.Lock()
+	delete(pbrTrackedRoutes.routes, subnet)
+	pbrTrackedRoutes.Unlock()
+
+	family := unix.AF_INET
+	if isIPv6(subnet) {
+		family = unix.AF_INET6
+	}
+
+	link, err := netlink.LinkByName(ifaceName)
+	if err == nil && link != nil {
+		route := &netlink.Route{
+			LinkIndex: link.Attrs().Index,
+			Dst:       ipnet,
+			Table:     PBRTable,
+		}
+		_ = netlink.RouteDel(route)
+	}
+
+	rule := netlink.NewRule()
+	rule.Family = family
+	rule.Dst = ipnet
+	rule.Table = PBRTable
+	rule.Priority = PBRPref
+	_ = netlink.RuleDel(rule)
+
+	return nil
+}
+
+// FlushPBR flushes all pref 99 rules and table 1000 routes using Netlink.
+func FlushPBR(iface string) error {
+	pbrTrackedRoutes.Lock()
+	pbrTrackedRoutes.routes = make(map[string]struct{})
+	pbrTrackedRoutes.Unlock()
+
+	rules, err := netlink.RuleList(netlink.FAMILY_ALL)
+	if err == nil {
+		for _, rule := range rules {
+			if rule.Priority == PBRPref {
+				_ = netlink.RuleDel(&rule)
+			}
+		}
+	}
+
+	tRoute := netlink.Route{Table: PBRTable}
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_ALL, &tRoute, netlink.RT_FILTER_TABLE)
+	if err == nil {
+		for _, r := range routes {
+			_ = netlink.RouteDel(&r)
+		}
+	}
+
+	return nil
+}
+
+func syncPeersRoutes(peers []wgtypes.PeerConfig, replace bool) {
+	ifaceName := ncutils.GetInterfaceName()
+	if replace {
+		newAllowed := make(map[string]struct{})
+		for _, peer := range peers {
+			if !peer.Remove {
+				for _, ipnet := range peer.AllowedIPs {
+					newAllowed[ipnet.String()] = struct{}{}
+				}
+			}
+		}
+		pbrTrackedRoutes.Lock()
+		for oldSubnet := range pbrTrackedRoutes.routes {
+			if _, exists := newAllowed[oldSubnet]; !exists {
+				isLocalNodeAddr := false
+				for _, node := range config.GetNodes() {
+					netRange := node.NetworkRange
+					if netRange.IP == nil && node.Address.Mask != nil {
+						netRange = net.IPNet{
+							IP:   node.Address.IP.Mask(node.Address.Mask),
+							Mask: node.Address.Mask,
+						}
+					}
+					netRange6 := node.NetworkRange6
+					if netRange6.IP == nil && node.Address6.Mask != nil {
+						netRange6 = net.IPNet{
+							IP:   node.Address6.IP.Mask(node.Address6.Mask),
+							Mask: node.Address6.Mask,
+						}
+					}
+					if netRange.String() == oldSubnet || netRange6.String() == oldSubnet {
+						isLocalNodeAddr = true
+						break
+					}
+				}
+				if !isLocalNodeAddr {
+					RemovePBRRoute(oldSubnet, ifaceName)
+				}
+			}
+		}
+		pbrTrackedRoutes.Unlock()
+	}
+
+	for _, peer := range peers {
+		if peer.Remove {
+			for _, ipnet := range peer.AllowedIPs {
+				RemovePBRRoute(ipnet.String(), ifaceName)
+			}
+		} else {
+			for _, ipnet := range peer.AllowedIPs {
+				AddPBRRoute(ipnet.String(), ifaceName)
+			}
+		}
+	}
 }
 
 // RemoveRoutes - Remove routes to the interface
 func RemoveRoutes(addrs []ifaceAddress) {
-	l, err := netlink.LinkByName(ncutils.GetInterfaceName())
-	if err != nil {
-		slog.Error("failed to get link to interface", "error", err)
-		return
-	}
-
+	ifaceName := ncutils.GetInterfaceName()
 	for _, addr := range addrs {
-		if (len(config.GetNodes()) > 1 && addr.IP == nil) || addr.Network.IP == nil || addr.Network.String() == IPv4Network ||
-			addr.Network.String() == IPv6Network || (len(config.GetNodes()) > 1 && addr.GwIP == nil) {
+		if addr.Network.IP == nil || addr.Network.String() == IPv4Network || addr.Network.String() == IPv6Network {
 			continue
 		}
-		slog.Info("removing route to interface", "route", fmt.Sprintf("%s -> %s ->%s", addr.IP.String(), addr.Network.String(), addr.GwIP.String()))
-		if err := netlink.RouteDel(&netlink.Route{
-			LinkIndex: l.Attrs().Index,
-			Gw:        addr.GwIP,
-			Src:       addr.IP,
-			Dst:       &addr.Network,
-			Priority:  int(addr.Metric),
-		}); err != nil {
-			slog.Warn("error removing route", "error", err.Error())
-		}
+		slog.Info("removing PBR route to interface", "subnet", addr.Network.String())
+		RemovePBRRoute(addr.Network.String(), ifaceName)
 	}
 }
 
 // SetRoutes - sets additional routes to the interface
 func SetRoutes(addrs []ifaceAddress) error {
-	l, err := netlink.LinkByName(ncutils.GetInterfaceName())
-	if err != nil {
-		slog.Error("failed to get link to interface", "error", err)
-		return err
-	}
-
+	ifaceName := ncutils.GetInterfaceName()
 	for _, addr := range addrs {
-		if (len(config.GetNodes()) > 1 && addr.IP == nil) || addr.Network.IP == nil || addr.Network.String() == IPv4Network ||
-			addr.Network.String() == IPv6Network || (len(config.GetNodes()) > 1 && addr.GwIP == nil) {
+		if addr.Network.IP == nil || addr.Network.String() == IPv4Network || addr.Network.String() == IPv6Network {
 			continue
 		}
-		slog.Info("adding route to interface", "route", fmt.Sprintf("%s -> %s ->%s", addr.IP.String(), addr.Network.String(), addr.GwIP.String()))
-		metric := EgressRouteMetric
-		if addr.Metric > 0 && addr.Metric < 999 {
-			metric = int(addr.Metric)
-		}
-		if err := netlink.RouteAdd(&netlink.Route{
-			LinkIndex: l.Attrs().Index,
-			Gw:        addr.GwIP,
-			Src:       addr.IP,
-			Dst:       &addr.Network,
-			Priority:  metric,
-		}); err != nil && !strings.Contains(err.Error(), "file exists") {
-			slog.Warn("error adding route", "error", err.Error())
-		}
+		slog.Info("adding PBR route to interface", "subnet", addr.Network.String())
+		AddPBRRoute(addr.Network.String(), ifaceName)
 	}
 	return nil
 }
@@ -924,6 +1107,7 @@ func getNewLink(name string) *netLink {
 
 // DeleteOldInterface - removes named interface
 func DeleteOldInterface(iface string) {
+	FlushPBR(iface)
 	logger.Log(3, "deleting interface", iface)
 	ip, err := exec.LookPath("ip")
 	if err != nil {

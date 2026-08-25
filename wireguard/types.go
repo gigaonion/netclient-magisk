@@ -44,18 +44,31 @@ func NewNCIface(host *config.Config, nodes config.NodeMap) *NCIface {
 			continue
 		}
 		if node.Address.IP != nil {
+			netRange := node.NetworkRange
+			if netRange.IP == nil && node.Address.Mask != nil {
+				netRange = net.IPNet{
+					IP:   node.Address.IP.Mask(node.Address.Mask),
+					Mask: node.Address.Mask,
+				}
+			}
 			addrs = append(addrs, ifaceAddress{
 				IP:      node.Address.IP,
-				Network: node.NetworkRange,
+				Network: netRange,
 			})
 		}
 		if node.Address6.IP != nil {
+			netRange6 := node.NetworkRange6
+			if netRange6.IP == nil && node.Address6.Mask != nil {
+				netRange6 = net.IPNet{
+					IP:   node.Address6.IP.Mask(node.Address6.Mask),
+					Mask: node.Address6.Mask,
+				}
+			}
 			addrs = append(addrs, ifaceAddress{
 				IP:      node.Address6.IP,
-				Network: node.NetworkRange6,
+				Network: netRange6,
 			})
 		}
-
 	}
 	iface := netmaker.Iface // store current iface cfg before it gets overwritten
 	netmaker = NCIface{

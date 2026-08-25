@@ -42,8 +42,8 @@ const (
 	DefaultListenPort = 51821
 	// DefaultMTU default MTU for wireguard
 	DefaultMTU = 1420
-	// DefaultFwMark default fwmark for wireguard on Android / Linux
-	DefaultFwMark = 0x10067
+	// DefaultFwMark default fwmark for wireguard (0 = disabled, auto-route)
+	DefaultFwMark = 0
 )
 
 const (

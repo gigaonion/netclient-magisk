@@ -39,6 +39,9 @@ func ApplyWithoutWGQuick(nc *NCIface) error {
 			return errors.New("Unknown config error: " + err.Error())
 		}
 	}
+	if h := config.Netclient(); h != nil && h.FwMark != 0 {
+		nc.Config.FirewallMark = &h.FwMark
+	}
 	err = wgclient.ConfigureDevice(nc.Name, nc.Config)
 	if err != nil {
 		if os.IsNotExist(err) {

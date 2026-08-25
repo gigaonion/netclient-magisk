@@ -228,7 +228,11 @@ func SetPeers(replace bool) error {
 		ReplacePeers: replace,
 		Peers:        peers,
 	}
-	return apply(&config)
+	err := apply(&config)
+	if err == nil {
+		syncPeersRoutes(peers, replace)
+	}
+	return err
 }
 
 // == private ==
@@ -241,11 +245,18 @@ func UpdatePeer(p *wgtypes.PeerConfig) error {
 		Peers:        []wgtypes.PeerConfig{*p},
 		ReplacePeers: false,
 	}
-	return apply(&config)
+	err := apply(&config)
+	if err == nil {
+		syncPeersRoutes([]wgtypes.PeerConfig{*p}, false)
+	}
+	return err
 }
 
 func apply(c *wgtypes.Config) error {
 	slog.Debug("applying wireguard config")
+	if h := config.Netclient(); h != nil && h.FwMark != 0 {
+		c.FirewallMark = &h.FwMark
+	}
 	wg, err := wgctrl.New()
 	if err != nil {
 		return fmt.Errorf("wgctrl %w", err)
