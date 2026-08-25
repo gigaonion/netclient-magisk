@@ -4,12 +4,12 @@ Copyright © 2022 Netmaker Team <info@netmaker.io>
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/gravitl/netclient/config"
 	"github.com/gravitl/netclient/functions"
@@ -17,7 +17,6 @@ import (
 	"github.com/gravitl/netmaker/logger"
 	"github.com/gravitl/netmaker/schema"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var registerFlags = struct {
@@ -156,40 +155,11 @@ func validateIface(iface string) bool {
 }
 
 func checkUserRegistration(cmd *cobra.Command) error {
-	apiURI, err := cmd.Flags().GetString(registerFlags.Server)
-	if err != nil {
-		return err
+	token, err := cmd.Flags().GetString(registerFlags.Token)
+	if err == nil && len(token) > 0 {
+		return functions.Register(token)
 	}
-
-	var regData = functions.RegisterSSO{
-		API:      apiURI,
-		UsingSSO: true,
-	}
-
-	network, err := cmd.Flags().GetString(registerFlags.Network)
-	if err == nil {
-		regData.Network = network
-	}
-
-	useAllNetworks, err := cmd.Flags().GetBool(registerFlags.AllNetworks)
-	if err == nil {
-		regData.AllNetworks = useAllNetworks
-	}
-
-	userName, err := cmd.Flags().GetString(registerFlags.User)
-	if err == nil && len(userName) > 0 {
-		fmt.Printf("Continuing with user, %s.\nPlease input password:\n", userName)
-		pass, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil || len(pass) == 0 {
-			logger.FatalLog("no password provided, exiting")
-		}
-		regData.User = userName
-		regData.Pass = string(pass)
-		pass = nil
-		regData.UsingSSO = false
-	}
-
-	return functions.RegisterWithSSO(&regData)
+	return errors.New("browser-based OIDC / SSO authentication is disabled on Android daemon; please register using an enrollment token (-t <token>)")
 }
 
 func init() {

@@ -93,14 +93,8 @@ func doubleCheck(host *config.Config) (shouldUpdate bool, err error) {
 	if len(config.CurrServer) == 0 { // should indicate a first join
 		// do a double check of name and uuid
 		logger.Log(1, "performing first join")
-		if len(host.Name) == 0 {
-			if name, err := os.Hostname(); err == nil {
-				host.Name = name
-			} else {
-				hostName := ncutils.RandomString(12)
-				logger.Log(0, "host name not found, continuing with", hostName)
-				host.Name = hostName
-			}
+		if len(host.Name) == 0 || host.Name == "localhost" {
+			host.Name = ncutils.GetHostname()
 			shouldUpdateHost = true
 		}
 		if host.ID == uuid.Nil {
