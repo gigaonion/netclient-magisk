@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/exp/slog"
@@ -277,23 +278,41 @@ func StartBypassMonitor(ctx context.Context) {
 
 	slog.Info("started event-driven Wi-Fi bypass monitor")
 
+	var debounceTimer *time.Timer
+	var debounceMu sync.Mutex
+	triggerEvaluation := func() {
+		debounceMu.Lock()
+		defer debounceMu.Unlock()
+		if debounceTimer != nil {
+			debounceTimer.Stop()
+		}
+		debounceTimer = time.AfterFunc(200*time.Millisecond, func() {
+			EvaluateBypassRules()
+		})
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			debounceMu.Lock()
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
+			debounceMu.Unlock()
 			FlushBypassRules()
 			return
 		case linkUpdate := <-linkCh:
 			if linkUpdate.Link != nil && linkUpdate.Link.Attrs() != nil && strings.HasPrefix(linkUpdate.Link.Attrs().Name, "wlan") {
-				EvaluateBypassRules()
+				triggerEvaluation()
 			}
 		case addrUpdate := <-addrCh:
 			if link, err := netlink.LinkByIndex(addrUpdate.LinkIndex); err == nil && link != nil && strings.HasPrefix(link.Attrs().Name, "wlan") {
-				EvaluateBypassRules()
+				triggerEvaluation()
 			}
 		case routeUpdate := <-routeCh:
 			if routeUpdate.Route.LinkIndex != 0 {
 				if link, err := netlink.LinkByIndex(routeUpdate.Route.LinkIndex); err == nil && link != nil && strings.HasPrefix(link.Attrs().Name, "wlan") {
-					EvaluateBypassRules()
+					triggerEvaluation()
 				}
 			}
 		}

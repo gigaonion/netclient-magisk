@@ -200,11 +200,13 @@ func (nc *NCIface) ApplyAddrs() error {
 			}
 		}
 	}
-	// Apply loose reverse path filtering and iptables accept for Android
+	// Apply loose reverse path filtering, iptables accept, and outbound MASQUERADE for Android
 	_, _ = ncutils.RunCmd(fmt.Sprintf("sysctl -w net.ipv4.conf.%s.rp_filter=2", nc.Name), false)
 	_, _ = ncutils.RunCmd("sysctl -w net.ipv4.conf.all.rp_filter=2", false)
 	_, _ = ncutils.RunCmd(fmt.Sprintf("iptables -I INPUT 1 -i %s -j ACCEPT", nc.Name), false)
 	_, _ = ncutils.RunCmd(fmt.Sprintf("iptables -I OUTPUT 1 -o %s -j ACCEPT", nc.Name), false)
+	_, _ = ncutils.RunCmd(fmt.Sprintf("iptables -t nat -C POSTROUTING -o %s -j MASQUERADE", nc.Name), false)
+	_, _ = ncutils.RunCmd(fmt.Sprintf("iptables -t nat -I POSTROUTING 1 -o %s -j MASQUERADE", nc.Name), false)
 	return nil
 }
 
