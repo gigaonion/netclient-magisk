@@ -2,12 +2,10 @@ package dns
 
 import (
 	"context"
-	"runtime"
 	"slices"
 	"sync"
 	"time"
 
-	"github.com/gravitl/netclient/config"
 	"github.com/gravitl/netclient/ncutils"
 	"github.com/gravitl/netmaker/logger"
 
@@ -32,15 +30,11 @@ func init() {
 	cacheManager = dnscache.NewManager()
 }
 
-func Init() error {
-	var err error
-	configManager, err = dnsconfig.NewManager(dnsconfig.CleanupResidualInterfaceConfigs(ncutils.GetInterfaceName()))
-	if err != nil {
-		// set default noop dns config manager.
-		configManager = &dnsconfig.NoopManager{}
-	}
+const AndroidDNSListenerAddr = "127.0.0.1:5300"
 
-	return err
+func Init() error {
+	configManager = &dnsconfig.NoopManager{}
+	return nil
 }
 
 // GetInstance
@@ -48,7 +42,7 @@ func GetDNSServerInstance() *DNSServer {
 	return dnsServer
 }
 
-// Start the DNS listener
+// Start the DNS listener on 127.0.0.1:5300
 func (dnsServer *DNSServer) Start() {
 	dnsMutex.Lock()
 	defer dnsMutex.Unlock()
@@ -56,84 +50,30 @@ func (dnsServer *DNSServer) Start() {
 		return
 	}
 
-	if len(config.GetNodes()) == 0 {
-		return
+	lIp := AndroidDNSListenerAddr
+	dns.HandleFunc(".", handleDNSRequest)
+	srv := &dns.Server{
+		Net:       "udp",
+		Addr:      lIp,
+		UDPSize:   65535,
+		ReusePort: true,
+		ReuseAddr: true,
 	}
 
-	for _, v := range config.GetNodes() {
-		node := v
-		if v.Connected {
-			lAddr := []string{}
-			if node.Address.IP != nil {
-				lAddr = append(lAddr, node.Address.IP.String()+":53")
-			}
-			if node.Address6.IP != nil {
-				lAddr = append(lAddr, "["+node.Address6.IP.String()+"]:53")
-			}
+	dnsServer.AddrStr = lIp
+	dnsServer.AddrList = []string{lIp}
+	dnsServer.DnsServer = []*dns.Server{srv}
 
-			if len(lAddr) == 0 {
-				continue
-			}
-			for _, lIp := range lAddr {
-				dns.HandleFunc(".", handleDNSRequest)
-				srv := &dns.Server{
-					Net:       "udp",
-					Addr:      lIp,
-					UDPSize:   65535,
-					ReusePort: true,
-					ReuseAddr: true,
-				}
-
-				dnsServer.AddrStr = lIp
-				dnsServer.AddrList = append(dnsServer.AddrList, lIp)
-				dnsServer.DnsServer = append(dnsServer.DnsServer, srv)
-
-				go func(dnsServer *DNSServer) {
-					err := srv.ListenAndServe()
-					if err != nil {
-						slog.Error("error in starting dns server", "error", lIp, err.Error())
-						dnsServer.dropListener(lIp)
-					}
-				}(dnsServer)
-			}
-
+	go func(dnsServer *DNSServer) {
+		err := srv.ListenAndServe()
+		if err != nil {
+			slog.Error("error in starting dns server", "error", lIp, err.Error())
+			dnsServer.dropListener(lIp)
+			disableDNSDNAT()
 		}
-	}
+	}(dnsServer)
 
-	if runtime.GOOS == "darwin" {
-		lIp := "127.51.8.21:53"
-		dns.HandleFunc(".", handleDNSRequest)
-		srv := &dns.Server{
-			Net:       "udp",
-			Addr:      lIp,
-			UDPSize:   65535,
-			ReusePort: true,
-			ReuseAddr: true,
-		}
-
-		dnsServer.AddrStr = lIp
-		dnsServer.AddrList = append(dnsServer.AddrList, lIp)
-		dnsServer.DnsServer = append(dnsServer.DnsServer, srv)
-
-		go func(dnsServer *DNSServer) {
-			err := srv.ListenAndServe()
-			if err != nil {
-				slog.Error("error in starting dns server", "error", lIp, err.Error())
-				dnsServer.dropListener(lIp)
-			}
-		}(dnsServer)
-	}
-
-	time.Sleep(time.Second * 1)
-	//if listener failed to start, do not make DNS changes
-	if len(dnsServer.AddrList) == 0 || len(dnsServer.DnsServer) == 0 {
-		return
-	}
-
-	err := Configure()
-	if err != nil {
-		logger.Log(0, "error configuring dns settings:", err.Error())
-	}
+	enableDNSDNAT()
 
 	slog.Info("DNS server listens on: ", "Info", dnsServer.AddrList)
 }
@@ -160,12 +100,7 @@ func (dnsServer *DNSServer) Stop() {
 		return
 	}
 
-	err := configManager.Configure(ncutils.GetInterfaceName(), dnsconfig.Config{
-		Remove: true,
-	})
-	if err != nil {
-		logger.Log(0, "error resetting dns config:", err.Error())
-	}
+	disableDNSDNAT()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -180,4 +115,20 @@ func (dnsServer *DNSServer) Stop() {
 	dnsServer.AddrStr = ""
 	dnsServer.AddrList = []string{}
 	dnsServer.DnsServer = []*dns.Server{}
+}
+
+func enableDNSDNAT() {
+	_, _ = ncutils.RunCmd("iptables -t nat -D OUTPUT -p udp --dport 53 ! -d 127.0.0.1 -m owner ! --uid-owner 0 -j DNAT --to-destination 127.0.0.1:5300", false)
+	_, _ = ncutils.RunCmd("iptables -t nat -A OUTPUT -p udp --dport 53 ! -d 127.0.0.1 -m owner ! --uid-owner 0 -j DNAT --to-destination 127.0.0.1:5300", false)
+	_, _ = ncutils.RunCmd("ip6tables -t nat -D OUTPUT -p udp --dport 53 ! -d ::1 -m owner ! --uid-owner 0 -j DNAT --to-destination [::1]:5300", false)
+	_, _ = ncutils.RunCmd("ip6tables -t nat -A OUTPUT -p udp --dport 53 ! -d ::1 -m owner ! --uid-owner 0 -j DNAT --to-destination [::1]:5300", false)
+}
+
+func disableDNSDNAT() {
+	_, _ = ncutils.RunCmd("iptables -t nat -D OUTPUT -p udp --dport 53 ! -d 127.0.0.1 -m owner ! --uid-owner 0 -j DNAT --to-destination 127.0.0.1:5300", false)
+	_, _ = ncutils.RunCmd("iptables -t nat -D OUTPUT -p udp --dport 53 -m mark ! --mark 0x10067 ! -d 127.0.0.1 -j DNAT --to-destination 127.0.0.1:5300", false)
+	_, _ = ncutils.RunCmd("iptables -t nat -D OUTPUT -p udp --dport 53 ! -d 127.0.0.1 -j DNAT --to-destination 127.0.0.1:5300", false)
+	_, _ = ncutils.RunCmd("ip6tables -t nat -D OUTPUT -p udp --dport 53 ! -d ::1 -m owner ! --uid-owner 0 -j DNAT --to-destination [::1]:5300", false)
+	_, _ = ncutils.RunCmd("ip6tables -t nat -D OUTPUT -p udp --dport 53 -m mark ! --mark 0x10067 ! -d ::1 -j DNAT --to-destination [::1]:5300", false)
+	_, _ = ncutils.RunCmd("ip6tables -t nat -D OUTPUT -p udp --dport 53 ! -d ::1 -j DNAT --to-destination [::1]:5300", false)
 }

@@ -3,9 +3,11 @@ package ncutils
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -56,6 +58,22 @@ func SendRequest(method, endpoint string, headers http.Header, data any) (*bytes
 	client.RetryMax = 3
 	client.RetryWaitMax = 10 * time.Second
 	client.HTTPClient.Timeout = 15 * time.Second
+	client.HTTPClient.Transport = &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+			Resolver:  net.DefaultResolver,
+		}).DialContext,
+		TLSClientConfig: &tls.Config{
+			RootCAs: GetRootCAs(),
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	client.Logger = nil
 	client.CheckRetry = func(ctx context.Context, resp *http.Response, err error) (bool, error) {
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gravitl/netclient/config"
 	"github.com/gravitl/netclient/dns/querycache"
+	"github.com/gravitl/netclient/ncutils"
 	"github.com/gravitl/netmaker/logger"
 	"github.com/gravitl/netmaker/models"
 	"github.com/miekg/dns"
@@ -54,130 +55,85 @@ func handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 	reply.RecursionAvailable = true
 	reply.RecursionDesired = true
 	reply.Rcode = dns.RcodeSuccess
-	logger.Log(4, fmt.Sprintf("resolving dns query %s", r.Question[0].Name))
-	if config.Netclient().CurrGwNmIP != nil {
-		logger.Log(4, fmt.Sprintf(
-			"connected to gw, forwarding dns query %s to gw %s",
-			r.Question[0].Name,
-			config.Netclient().CurrGwNmIP.String()),
-		)
 
-		resp, err := exchangeDNSQueryWithPool(r, config.Netclient().CurrGwNmIP.String())
-		if err != nil {
-			logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with gw %s: %v", r.Question[0].Name, config.Netclient().CurrGwNmIP.String(), err))
-		} else {
-			logger.Log(4, fmt.Sprintf("resolved dns query %s with gw %s: %v", r.Question[0].Name, config.Netclient().CurrGwNmIP.String(), resp.Answer))
-			reply.Authoritative = resp.Authoritative
-			reply.Answer = append(reply.Answer, resp.Answer...)
+	if len(r.Question) == 0 {
+		_ = w.WriteMsg(reply)
+		return
+	}
+
+	qName := r.Question[0].Name
+	logger.Log(4, fmt.Sprintf("resolving dns query %s", qName))
+
+	// 1. Try resolving egress domain
+	if MatchesEgressDomain(qName) {
+		logger.Log(4, fmt.Sprintf("resolving egress domain %s via egress DNS", qName))
+		publicResp, err := ResolveEgressQuery(r)
+		if err == nil && publicResp != nil && len(publicResp.Answer) > 0 {
+			reply.Answer = append(reply.Answer, publicResp.Answer...)
+			reply.Authoritative = publicResp.Authoritative
+			go recordDNSAnswers(reply.Answer)
+			_ = w.WriteMsg(reply)
+			return
 		}
-	} else {
-		query := canonicalizeDomainForMatching(r.Question[0].Name)
-		currServer := config.GetServer(config.CurrServer)
-		if currServer == nil {
-			reply.Rcode = dns.RcodeServerFailure
-		} else {
-			if MatchesEgressDomain(r.Question[0].Name) {
-				logger.Log(4, fmt.Sprintf("resolving egress domain %s via egress DNS", r.Question[0].Name))
-				publicResp, err := ResolveEgressQuery(r)
-				if err == nil && publicResp != nil && len(publicResp.Answer) > 0 {
-					reply.Answer = append(reply.Answer, publicResp.Answer...)
-					reply.Authoritative = publicResp.Authoritative
-					go recordDNSAnswers(reply.Answer)
-					_ = w.WriteMsg(reply)
-					return
-				}
-				if err != nil {
-					logger.Log(4, fmt.Sprintf("egress domain public DNS failed for %s: %v", r.Question[0].Name, err))
+	}
+
+	// 2. Try resolving with local registered netmaker records
+	resp, err := GetDNSResolverInstance().Lookup(r)
+	if err == nil && resp != nil {
+		logger.Log(4, fmt.Sprintf("resolved dns query %s with local records: %v", qName, resp))
+		reply.Authoritative = true
+		reply.Answer = append(reply.Answer, resp)
+		go recordDNSAnswers(reply.Answer)
+		_ = w.WriteMsg(reply)
+		return
+	}
+
+	// 3. Check for matching VPN domain / nameserver
+	query := canonicalizeDomainForMatching(qName)
+	currServer := config.GetServer(config.CurrServer)
+	if currServer != nil {
+		bestMatchNameservers := findBestMatch(query, currServer.DnsNameservers)
+		for _, nameserver := range bestMatchNameservers {
+			if nameserver.IsFallback {
+				continue
+			}
+			var queryResolved bool
+			for _, ns := range nameserver.IPs {
+				logger.Log(4, fmt.Sprintf("found best match %s, forwarding dns query %s to nameserver %s", nameserver.MatchDomain, qName, ns))
+				nsResp, err := exchangeDNSQueryWithPool(r, ns)
+				if err == nil && nsResp != nil && len(nsResp.Answer) > 0 && nsResp.Rcode == dns.RcodeSuccess {
+					reply.Answer = append(reply.Answer, nsResp.Answer...)
+					reply.Authoritative = nsResp.Authoritative
+					queryResolved = true
+					break
 				}
 			}
-
-			// query matches default domain, resolve with local records
-			logger.Log(4, fmt.Sprintf("resolving dns query %s with local records", r.Question[0].Name))
-
-			resp, err := GetDNSResolverInstance().Lookup(r)
-			if err != nil {
-				logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with local records: %v", r.Question[0].Name, err))
-			} else {
-				logger.Log(4, fmt.Sprintf("resolved dns query %s with local records: %v", r.Question[0].Name, resp))
-				reply.Authoritative = true
-				reply.Answer = append(reply.Answer, resp)
+			if queryResolved {
+				break
 			}
-			if len(reply.Answer) == 0 {
-				bestMatchNameservers := findBestMatch(query, currServer.DnsNameservers)
-				for _, nameserver := range bestMatchNameservers {
-					if nameserver.IsFallback {
-						continue
-					}
-					var queryResolved bool
-					for _, ns := range nameserver.IPs {
-						logger.Log(4, fmt.Sprintf("found best match %s, forwarding dns query %s to nameserver %s", nameserver.MatchDomain, r.Question[0].Name, ns))
+		}
 
-						resp, err := exchangeDNSQueryWithPool(r, ns)
-						if err != nil || resp == nil || len(resp.Answer) == 0 {
-							if err != nil {
-								logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with nameserver %s: %v", r.Question[0].Name, ns, err))
-							} else {
-								logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with nameserver %s: no answer", r.Question[0].Name, ns))
-							}
-							continue
-						}
-
-						if resp.Rcode != dns.RcodeSuccess {
-							logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with nameserver %s: rcode %d", r.Question[0].Name, ns, resp.Rcode))
-							continue
-						}
-
-						if len(resp.Answer) > 0 {
-							logger.Log(4, fmt.Sprintf("resolved dns query %s with nameserver %s: %v", r.Question[0].Name, ns, resp.Answer))
-							reply.Answer = append(reply.Answer, resp.Answer...)
-							reply.Authoritative = resp.Authoritative
-							queryResolved = true
-							break
-						}
-					}
-					if queryResolved {
-						break
-					}
+		// If matched default domain or if gateway is present and query matched VPN network
+		if len(reply.Answer) == 0 && config.Netclient().CurrGwNmIP != nil {
+			if currServer.DefaultDomain != "" && strings.HasSuffix(query, canonicalizeDomainForMatching(currServer.DefaultDomain)) {
+				gwResp, err := exchangeDNSQueryWithPool(r, config.Netclient().CurrGwNmIP.String())
+				if err == nil && gwResp != nil && len(gwResp.Answer) > 0 {
+					reply.Authoritative = gwResp.Authoritative
+					reply.Answer = append(reply.Answer, gwResp.Answer...)
 				}
+			}
+		}
+	}
 
-				if len(reply.Answer) == 0 {
-					logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with configured nameservers, falling back to fallback nameservers", r.Question[0].Name))
-
-					for _, nameserver := range bestMatchNameservers {
-						if nameserver.IsFallback {
-							var queryResolved bool
-							for _, ns := range nameserver.IPs {
-								logger.Log(4, fmt.Sprintf("forwarding dns query %s to fallback nameserver %s", r.Question[0].Name, ns))
-
-								resp, err := exchangeDNSQueryWithPool(r, ns)
-								if err != nil || resp == nil || len(resp.Answer) == 0 {
-									if err != nil {
-										logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with fallback nameserver %s: %v", r.Question[0].Name, ns, err))
-									} else {
-										logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with fallback nameserver %s: no answer", r.Question[0].Name, ns))
-									}
-									continue
-								}
-
-								if resp.Rcode != dns.RcodeSuccess {
-									logger.Log(4, fmt.Sprintf("failed to resolve dns query %s with fallback nameserver %s: rcode %d", r.Question[0].Name, ns, resp.Rcode))
-									continue
-								}
-
-								if len(resp.Answer) > 0 {
-									logger.Log(4, fmt.Sprintf("resolved dns query %s with fallback nameserver %s: %v", r.Question[0].Name, ns, resp.Answer))
-									reply.Answer = append(reply.Answer, resp.Answer...)
-									reply.Authoritative = resp.Authoritative
-									queryResolved = true
-									break
-								}
-							}
-							if queryResolved {
-								break
-							}
-						}
-					}
-				}
+	// 4. For non-VPN domain queries (or unresolved queries), forward to system DNS (e.g. Wi-Fi DHCP DNS) and public forwarders
+	if len(reply.Answer) == 0 {
+		forwarders := ncutils.GetSystemDNSServers()
+		for _, ns := range forwarders {
+			pubResp, err := exchangeDNSQueryWithPool(r, ns)
+			if err == nil && pubResp != nil && len(pubResp.Answer) > 0 && pubResp.Rcode == dns.RcodeSuccess {
+				reply.Answer = append(reply.Answer, pubResp.Answer...)
+				reply.Authoritative = pubResp.Authoritative
+				break
 			}
 		}
 	}
