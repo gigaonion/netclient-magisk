@@ -26,7 +26,7 @@ import (
 
 var (
 	// PeerConnectionCheckInterval - time interval to check peer connection status
-	PeerConnectionCheckInterval = time.Second * 15
+	PeerConnectionCheckInterval = time.Second * 60
 	// LastHandShakeThreshold - threshold for considering inactive connection
 	LastHandShakeThreshold = time.Minute * 3
 	//

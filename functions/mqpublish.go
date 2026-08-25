@@ -74,7 +74,7 @@ const (
 
 // metricTicker - metrics collection interval in minutes
 var metricTicker = time.NewTicker(time.Minute * time.Duration(15))
-var ipTicker = time.NewTicker(time.Second * time.Duration(15))
+var ipTicker = time.NewTicker(time.Minute * time.Duration(5))
 
 // Checkin  -- go routine that checks for public or local ip changes, publishes changes
 //
@@ -88,7 +88,7 @@ func Checkin(ctx context.Context, wg *sync.WaitGroup) {
 	defer checkinTicker.Stop()
 	server := config.GetServer(config.CurrServer)
 	metricTickerIntervalMin := 15
-	ipTickerIntervalSec := 15
+	ipTickerIntervalSec := 300
 	if server != nil {
 		i, err := strconv.Atoi(server.MetricInterval)
 		if err == nil && i > 0 {
