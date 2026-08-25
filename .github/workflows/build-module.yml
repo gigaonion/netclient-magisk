@@ -52,13 +52,23 @@ jobs:
       - name: Generate Changelog
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 ${{ github.ref_name }}^ 2>/dev/null || true)
+          CURRENT_TAG="${{ github.ref_name }}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v' | grep -v "^${CURRENT_TAG}$" | head -n 1 || true)
           echo "## 変更履歴 (Changelog)" > release_notes.md
           echo "" >> release_notes.md
-          if [ -n "$PREV_TAG" ]; then
-            git log ${PREV_TAG}..${{ github.ref_name }} --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> release_notes.md
+          if [ -n "$PREV_TAG" ] && git merge-base --is-ancestor "$PREV_TAG" "$CURRENT_TAG" 2>/dev/null; then
+            echo "Changes since **$PREV_TAG**:" >> release_notes.md
+            echo "" >> release_notes.md
+            git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> release_notes.md
+          elif [ -n "$PREV_TAG" ]; then
+            MB=$(git merge-base "$PREV_TAG" "$CURRENT_TAG" 2>/dev/null || true)
+            if [ -n "$MB" ]; then
+              git log ${MB}..${CURRENT_TAG} --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> release_notes.md
+            else
+              git log -n 10 --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> release_notes.md
+            fi
           else
-            git log -n 50 --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> release_notes.md
+            git log -n 20 --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> release_notes.md
           fi
           echo "" >> release_notes.md
           echo "" >> release_notes.md
