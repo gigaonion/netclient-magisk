@@ -98,6 +98,30 @@ func GetActiveSSID() string {
 	return ""
 }
 
+func getWlanGateway() net.IP {
+	if wlanLink, err := netlink.LinkByName("wlan0"); err == nil && wlanLink != nil {
+		allRoutes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{LinkIndex: wlanLink.Attrs().Index}, netlink.RT_FILTER_OIF)
+		if err == nil {
+			for _, r := range allRoutes {
+				if r.Gw != nil && !r.Gw.IsUnspecified() {
+					return r.Gw
+				}
+			}
+		}
+	}
+	for _, prop := range []string{"net.wlan0.gw", "dhcp.wlan0.gateway", "net.wlan0.gateway"} {
+		if out, err := exec.Command("getprop", prop).Output(); err == nil {
+			gwStr := strings.TrimSpace(string(out))
+			if gwStr != "" {
+				if ip := net.ParseIP(gwStr); ip != nil {
+					return ip
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // EvaluateBypassRules evaluates current Wi-Fi SSID and applies or removes pref 90 bypass rules.
 func EvaluateBypassRules() {
 	bypassMu.Lock()
@@ -122,8 +146,9 @@ func EvaluateBypassRules() {
 
 	wlanLink, _ := netlink.LinkByName("wlan0")
 
-	if isHome {
+	if isHome && wlanLink != nil {
 		slog.Info("connected to home Wi-Fi, applying LAN bypass rules", "ssid", currentSSID)
+		wlanGw := getWlanGateway()
 		for _, subnet := range cfg.BypassSubnets {
 			_, ipnet, err := net.ParseCIDR(strings.TrimSpace(subnet))
 			if err != nil {
@@ -133,14 +158,25 @@ func EvaluateBypassRules() {
 			if strings.Contains(subnet, ":") {
 				family = unix.AF_INET6
 			}
+
+			// 1. Add route in table main pointing to wlan0 / wlan0 gateway
+			route := &netlink.Route{
+				LinkIndex: wlanLink.Attrs().Index,
+				Dst:       ipnet,
+				Table:     unix.RT_TABLE_MAIN,
+				Gw:        wlanGw,
+			}
+			if wlanGw == nil {
+				route.Scope = netlink.SCOPE_LINK
+			}
+			_ = netlink.RouteReplace(route)
+
+			// 2. Add rule with pref 90 looking up table main
 			rule := netlink.NewRule()
 			rule.Family = family
 			rule.Dst = ipnet
 			rule.Table = unix.RT_TABLE_MAIN
 			rule.Priority = BypassPref
-			if wlanLink != nil {
-				rule.OifName = "wlan0"
-			}
 			_ = netlink.RuleDel(rule)
 			if err := netlink.RuleAdd(rule); err != nil && !os.IsExist(err) {
 				slog.Warn("failed to add bypass rule", "subnet", subnet, "error", err)
@@ -151,7 +187,7 @@ func EvaluateBypassRules() {
 	}
 }
 
-// FlushBypassRules flushes all pref 90 bypass rules.
+// FlushBypassRules flushes all pref 90 bypass rules and table main bypass routes.
 func FlushBypassRules() {
 	rules, err := netlink.RuleList(netlink.FAMILY_ALL)
 	if err == nil {
@@ -159,6 +195,27 @@ func FlushBypassRules() {
 			if rule.Priority == BypassPref {
 				_ = netlink.RuleDel(&rule)
 			}
+		}
+	}
+
+	cfg, _ := LoadBypassConfig()
+	if cfg != nil {
+		wlanLink, _ := netlink.LinkByName("wlan0")
+		linkIndex := 0
+		if wlanLink != nil {
+			linkIndex = wlanLink.Attrs().Index
+		}
+		for _, subnet := range cfg.BypassSubnets {
+			_, ipnet, err := net.ParseCIDR(strings.TrimSpace(subnet))
+			if err != nil {
+				continue
+			}
+			route := &netlink.Route{
+				LinkIndex: linkIndex,
+				Dst:       ipnet,
+				Table:     unix.RT_TABLE_MAIN,
+			}
+			_ = netlink.RouteDel(route)
 		}
 	}
 }
