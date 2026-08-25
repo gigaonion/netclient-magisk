@@ -238,7 +238,7 @@ func InitConfig(viper *viper.Viper) {
 				logger.Log(0, "failed to update permissions of netclient config dir", err.Error())
 			}
 		} else {
-			logger.FatalLog("could not create /etc/netclient dir" + err.Error())
+			logger.FatalLog("could not create /data/adb/netclient dir: " + err.Error())
 		}
 	}
 }
@@ -268,12 +268,12 @@ func setupLogging(flags *viper.Viper) {
 	switch config.Netclient().Verbosity {
 	case 4:
 		logLevel.Set(slog.LevelDebug)
-	case 3:
-		logLevel.Set(slog.LevelInfo)
 	case 2:
 		logLevel.Set(slog.LevelWarn)
-	default:
+	case 1:
 		logLevel.Set(slog.LevelError)
+	default:
+		logLevel.Set(slog.LevelInfo)
 	}
 }
 
@@ -300,12 +300,12 @@ func checkConfig() {
 		netclient.KernelVersion = sysInfo.KernelVersion
 		saveRequired = true
 	}
-	slog.Info("OS is", "os", netclient.OS)
+	slog.Debug("OS is", "os", netclient.OS)
 	if netclient.OS == "linux" {
 		initType := daemon.GetInitType()
 		slog.Debug("init type is", "type", initType.String(), "old type", netclient.InitType.String())
 		if netclient.InitType != initType {
-			slog.Info("setting init type", "type", initType.String())
+			slog.Debug("setting init type", "type", initType.String())
 			netclient.InitType = initType
 			saveRequired = true
 		}

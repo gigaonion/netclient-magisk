@@ -7,7 +7,7 @@ import (
 )
 
 // PidFile - path/name of pid file
-const PidFile = "/var/run/netclient.pid"
+const PidFile = "/data/adb/netclient/netclient.pid"
 
 // WindowsPIDError - error returned from pid function on windows
 type WindowsPIDError struct{}

@@ -27,7 +27,7 @@ import (
 
 const (
 	// LinuxAppDataPath - linux path
-	LinuxAppDataPath = "/etc/netclient/"
+	LinuxAppDataPath = "/data/adb/netclient/"
 	// MacAppDataPath - mac path
 	MacAppDataPath = "/Applications/Netclient/"
 	// WindowsAppDataPath - windows path
@@ -42,6 +42,8 @@ const (
 	DefaultListenPort = 51821
 	// DefaultMTU default MTU for wireguard
 	DefaultMTU = 1420
+	// DefaultFwMark default fwmark for wireguard on Android / Linux
+	DefaultFwMark = 0x10067
 )
 
 const (
@@ -350,7 +352,7 @@ func GetNetclientInstallPath() string {
 	case "macos":
 		return "/usr/local/bin/netclient"
 	default:
-		return "/usr/bin/netclient"
+		return "/data/adb/netclient/netclient"
 	}
 }
 
