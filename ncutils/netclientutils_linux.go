@@ -14,7 +14,6 @@ import (
 func RunCmd(command string, printerr bool) (string, error) {
 	args := strings.Fields(command)
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Wait()
 	out, err := cmd.CombinedOutput()
 	if err != nil && printerr {
 		logger.Log(0, fmt.Sprintf("error running command: %s", command))

@@ -323,9 +323,9 @@ func checkConfig() {
 		netclient.HostPass = ncutils.RandomString(32)
 		saveRequired = true
 	}
-	if netclient.Name == "" {
+	if netclient.Name == "" || netclient.Name == "localhost" {
 		logger.Log(0, "setting name")
-		netclient.Name, _ = os.Hostname()
+		netclient.Name = ncutils.GetHostname()
 		//make sure hostname is suitable
 		netclient.Name = config.FormatName(netclient.Name)
 		saveRequired = true

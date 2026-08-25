@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"syscall"
@@ -13,9 +14,23 @@ import (
 	"golang.org/x/exp/slog"
 )
 
-const ExecDir = "/sbin/"
+const ExecDir = "/data/adb/netclient/"
+
+func isAndroid() bool {
+	if _, err := os.Stat("/system/bin/sh"); err == nil {
+		return true
+	}
+	if _, err := os.Stat("/data/adb"); err == nil {
+		return true
+	}
+	return false
+}
 
 func install() error {
+	if isAndroid() {
+		_ = os.MkdirAll(ExecDir, 0755)
+		return nil
+	}
 	slog.Info("installing netclient binary")
 	binarypath, err := os.Executable()
 	if err != nil {
@@ -49,6 +64,16 @@ func install() error {
 
 // start - starts daemon
 func start() error {
+	if isAndroid() {
+		pid, err := ncutils.ReadPID()
+		if err == nil && pid > 0 {
+			if process, err := os.FindProcess(pid); err == nil && process.Signal(syscall.Signal(0)) == nil {
+				return nil
+			}
+		}
+		cmd := exec.Command("/system/bin/sh", "-c", "nohup /system/bin/netclient daemon >> /data/adb/netclient/netclient.log 2>&1 &")
+		return cmd.Start()
+	}
 	host := config.Netclient()
 	if !host.DaemonInstalled {
 		slog.Warn("netclient daemon not installed")
@@ -71,6 +96,9 @@ func start() error {
 
 // stop - stops daemon
 func stop() error {
+	if isAndroid() {
+		return signalDaemon(syscall.SIGTERM)
+	}
 	host := config.Netclient()
 	if !host.DaemonInstalled {
 		slog.Warn("netclient daemon not installed")
@@ -92,9 +120,14 @@ func stop() error {
 }
 
 // restart - restarts daemon via init system where needed, falls back to SIGHUP.
-// OpenRC with supervise-daemon manages the PID file itself, so sending SIGHUP
-// directly via signalDaemon may target the wrong process.
 func restart() error {
+	if isAndroid() {
+		err := signalDaemon(syscall.SIGHUP)
+		if err != nil {
+			return start()
+		}
+		return nil
+	}
 	host := config.Netclient()
 	switch host.InitType {
 	case config.OpenRC:
@@ -106,6 +139,9 @@ func restart() error {
 
 // hardRestart - restarts daemon through the init system (full stop+start cycle)
 func hardRestart() error {
+	if isAndroid() {
+		return signalDaemon(syscall.SIGHUP)
+	}
 	host := config.Netclient()
 	if !host.DaemonInstalled {
 		slog.Warn("netclient daemon not installed")
@@ -170,7 +206,7 @@ func cleanUp() error {
 	if host.InitType == config.Systemd || host.InitType == config.Initd {
 		slog.Info("log files not removed for systemd or initd", "init type", host.InitType)
 	} else {
-		if err := os.Remove("/var/log/netclient.log"); err != nil {
+		if err := os.Remove("/data/adb/netclient/netclient.log"); err != nil && !os.IsNotExist(err) {
 			slog.Error("Removing netclient log:", "error", err)
 			faults = faults + err.Error()
 		}
@@ -182,13 +218,15 @@ func cleanUp() error {
 }
 
 func GetInitType() config.InitType {
+	if isAndroid() {
+		return config.Initd
+	}
 	slog.Debug("getting init type", "os", runtime.GOOS)
 	if runtime.GOOS != "linux" {
 		return config.UnKnown
 	}
 	out, err := ncutils.RunCmd("ls -l /sbin/init", false)
 	if err != nil {
-		slog.Error("error checking /sbin/init", "error", err)
 		return config.UnKnown
 	}
 	slog.Debug("checking /sbin/init", "output ", out)
