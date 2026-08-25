@@ -104,6 +104,8 @@ func Daemon() {
 			// checkAndRestoreDefaultGateway only stops the IGW monitor when the
 			// restore succeeds; keep health checks off across the whole rebuild.
 			rebuilt := wireguard.BeginIfaceRebuild()
+			cache.EndpointCache = sync.Map{}
+			cache.SkipEndpointCache = sync.Map{}
 			closeRoutines([]context.CancelFunc{
 				cancel,
 			}, &wg)

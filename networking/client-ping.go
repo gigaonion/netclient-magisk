@@ -21,6 +21,7 @@ import (
 	"github.com/gravitl/netmaker/schema"
 	"github.com/gravitl/netmaker/scope"
 	"golang.org/x/exp/slog"
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 var (
@@ -131,6 +132,10 @@ func CheckPeerEndpoints(ctx context.Context, waitg *sync.WaitGroup) {
 					slog.Debug("failed to get peers from device: ", "error", err)
 					return
 				}
+				metricPort := config.GetServer(config.CurrServer).MetricsPort
+				if metricPort == 0 {
+					metricPort = 51821
+				}
 				for _, node := range nodes {
 					if node.Server != config.CurrServer {
 						continue
@@ -150,8 +155,28 @@ func CheckPeerEndpoints(ctx context.Context, waitg *sync.WaitGroup) {
 						}
 						// check if local endpoint is present
 						localEndpoint, ok := wireguard.GetBetterEndpoint(pubKey)
-						if ok && !devicePeer.Endpoint.IP.Equal(localEndpoint.IP) {
-							SetPeerEndpoint(pubKey, cache.EndpointCacheValue{Endpoint: localEndpoint})
+						if ok && localEndpoint != nil && localEndpoint.IP != nil {
+							if localEndpoint.IP.IsPrivate() {
+								if !tryLocalConnect(localEndpoint.IP.String(), pubKey, metricPort) {
+									slog.Info("local endpoint unreachable, reverting to server endpoint", "peer", pubKey)
+									cache.EndpointCache.Delete(pubKey)
+									for _, hp := range config.Netclient().HostPeers {
+										if hp.PublicKey.String() == pubKey && hp.Endpoint != nil {
+											_ = wireguard.UpdatePeer(&wgtypes.PeerConfig{
+												PublicKey:         hp.PublicKey,
+												Endpoint:          hp.Endpoint,
+												UpdateOnly:        true,
+												ReplaceAllowedIPs: false,
+											})
+											break
+										}
+									}
+									continue
+								}
+							}
+							if devicePeer.Endpoint == nil || !devicePeer.Endpoint.IP.Equal(localEndpoint.IP) {
+								SetPeerEndpoint(pubKey, cache.EndpointCacheValue{Endpoint: localEndpoint})
+							}
 						}
 					}
 				}
