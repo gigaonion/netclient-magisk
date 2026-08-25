@@ -98,6 +98,11 @@ func GetActiveSSID() string {
 	return ""
 }
 
+func flushRouteCache() {
+	_ = os.WriteFile("/proc/sys/net/ipv4/route/flush", []byte("1"), 0644)
+	_ = os.WriteFile("/proc/sys/net/ipv6/route/flush", []byte("1"), 0644)
+}
+
 func getWlanGateway() net.IP {
 	if wlanLink, err := netlink.LinkByName("wlan0"); err == nil && wlanLink != nil {
 		allRoutes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{LinkIndex: wlanLink.Attrs().Index}, netlink.RT_FILTER_OIF)
@@ -108,13 +113,34 @@ func getWlanGateway() net.IP {
 				}
 			}
 		}
+		// Check all routes across all routing tables for a default route via wlan0
+		routes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
+		if err == nil {
+			for _, r := range routes {
+				if r.LinkIndex == wlanLink.Attrs().Index && r.Gw != nil && !r.Gw.IsUnspecified() {
+					return r.Gw
+				}
+			}
+		}
 	}
-	for _, prop := range []string{"net.wlan0.gw", "dhcp.wlan0.gateway", "net.wlan0.gateway"} {
+	for _, prop := range []string{"net.wlan0.gw", "dhcp.wlan0.gateway", "net.wlan0.gateway", "net.dns1"} {
 		if out, err := exec.Command("getprop", prop).Output(); err == nil {
 			gwStr := strings.TrimSpace(string(out))
 			if gwStr != "" {
-				if ip := net.ParseIP(gwStr); ip != nil {
+				if ip := net.ParseIP(gwStr); ip != nil && ip.To4() != nil {
 					return ip
+				}
+			}
+		}
+	}
+	// Intelligent subnet fallback: default to .1 of the wlan0 subnet
+	if wlanLink, err := netlink.LinkByName("wlan0"); err == nil && wlanLink != nil {
+		addrs, err := netlink.AddrList(wlanLink, netlink.FAMILY_V4)
+		if err == nil {
+			for _, addr := range addrs {
+				if addr.IP != nil && addr.IP.To4() != nil {
+					ip4 := addr.IP.To4()
+					return net.IPv4(ip4[0], ip4[1], ip4[2], 1)
 				}
 			}
 		}
@@ -182,6 +208,7 @@ func EvaluateBypassRules() {
 				slog.Warn("failed to add bypass rule", "subnet", subnet, "error", err)
 			}
 		}
+		flushRouteCache()
 	} else {
 		FlushBypassRules()
 	}
@@ -218,6 +245,7 @@ func FlushBypassRules() {
 			_ = netlink.RouteDel(route)
 		}
 	}
+	flushRouteCache()
 }
 
 // StartBypassMonitor starts an event-driven Netlink listener for network state changes (0% idle CPU).
@@ -241,6 +269,12 @@ func StartBypassMonitor(ctx context.Context) {
 	}
 	defer close(addrDone)
 
+	routeCh := make(chan netlink.RouteUpdate)
+	routeDone := make(chan struct{})
+	if err := netlink.RouteSubscribe(routeCh, routeDone); err == nil {
+		defer close(routeDone)
+	}
+
 	slog.Info("started event-driven Wi-Fi bypass monitor")
 
 	for {
@@ -255,6 +289,12 @@ func StartBypassMonitor(ctx context.Context) {
 		case addrUpdate := <-addrCh:
 			if link, err := netlink.LinkByIndex(addrUpdate.LinkIndex); err == nil && link != nil && strings.HasPrefix(link.Attrs().Name, "wlan") {
 				EvaluateBypassRules()
+			}
+		case routeUpdate := <-routeCh:
+			if routeUpdate.Route.LinkIndex != 0 {
+				if link, err := netlink.LinkByIndex(routeUpdate.Route.LinkIndex); err == nil && link != nil && strings.HasPrefix(link.Attrs().Name, "wlan") {
+					EvaluateBypassRules()
+				}
 			}
 		}
 	}
