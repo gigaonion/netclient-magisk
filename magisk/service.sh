@@ -9,7 +9,12 @@ until [ "$(getprop sys.boot_completed)" = "1" ]; do
 done
 
 # Give network stack a few seconds to settle
-for i in {1..30}; do ping -c 1 -W 1 1.0.0.1 >/dev/null 2>&1 && break || sleep 1; done
+TRY=0
+while [ $TRY -lt 30 ]; do
+    ping -c 1 -W 1 1.0.0.1 >/dev/null 2>&1 && break
+    TRY=$((TRY + 1))
+    sleep 1
+done
 
 # Ensure WireGuard kernel module is loaded
 modprobe wireguard 2>/dev/null || true
@@ -43,6 +48,8 @@ if [ -f /data/adb/netclient/netclient.pid ]; then
         kill -9 "$OLD_PID" 2>/dev/null || true
     fi
     rm -f /data/adb/netclient/netclient.pid
+fi
+
 # Rotate log file if > 2MB
 LOG_FILE="/data/adb/netclient/netclient.log"
 if [ -f "$LOG_FILE" ]; then

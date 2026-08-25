@@ -150,7 +150,7 @@ func IsNetworkPresentOnLocalInterface(network net.IPNet) bool {
 	}
 	netOnes, netBits := network.Mask.Size()
 	for _, iface := range ifaces {
-		if iface.Name == ncIfaceName {
+		if iface.Name == ncIfaceName || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
 		addrs, err := iface.Addrs()
@@ -174,6 +174,11 @@ func IsNetworkPresentOnLocalInterface(network net.IPNet) bool {
 }
 
 func filterConflictingRoutes(addrs []ifaceAddress) []ifaceAddress {
+	if runtime.GOOS == "linux" {
+		// On Linux with PBR (Table 1000 & pref 99 / pref 90 bypass),
+		// routes are isolated in Table 1000 and should not be suppressed.
+		return addrs
+	}
 	filtered := make([]ifaceAddress, 0, len(addrs))
 	for _, addr := range addrs {
 		if addr.Network.IP != nil && IsNetworkPresentOnLocalInterface(addr.Network) {
