@@ -34,7 +34,7 @@ fi
 
 echo ""
 echo "--- Policy Rules (pref 90 & 99) ---"
-ip rule show 2>/dev/null | grep -E "(90:|99:|1000)" || echo "No active Netclient PBR rules found"
-ip -6 rule show 2>/dev/null | grep -E "(90:|99:|1000)" || echo "No active IPv6 Netclient PBR rules found"
+ip rule show 2>/dev/null | grep -E "^[[:space:]]*(90|99):" || echo "No active Netclient PBR rules found"
+ip -6 rule show 2>/dev/null | grep -E "^[[:space:]]*(90|99):" || echo "No active IPv6 Netclient PBR rules found"
 
 echo "=========================================="

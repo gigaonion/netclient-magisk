@@ -129,7 +129,12 @@ func EvaluateBypassRules() {
 			if err != nil {
 				continue
 			}
+			family := unix.AF_INET
+			if strings.Contains(subnet, ":") {
+				family = unix.AF_INET6
+			}
 			rule := netlink.NewRule()
+			rule.Family = family
 			rule.Dst = ipnet
 			rule.Table = unix.RT_TABLE_MAIN
 			rule.Priority = BypassPref

@@ -358,6 +358,32 @@ func FlushPBR(iface string) error {
 	return nil
 }
 
+func isLocalNodeSubnet(subnet string) bool {
+	_, parsedSubnet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		ip := net.ParseIP(subnet)
+		if ip == nil {
+			return false
+		}
+		for _, node := range config.GetNodes() {
+			if (node.Address.IP != nil && node.Address.IP.Equal(ip)) || (node.Address6.IP != nil && node.Address6.IP.Equal(ip)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, node := range config.GetNodes() {
+		if node.Address.IP != nil && parsedSubnet.Contains(node.Address.IP) {
+			return true
+		}
+		if node.Address6.IP != nil && parsedSubnet.Contains(node.Address6.IP) {
+			return true
+		}
+	}
+	return false
+}
+
 func syncPeersRoutes(peers []wgtypes.PeerConfig, replace bool) {
 	ifaceName := ncutils.GetInterfaceName()
 	if replace {
@@ -372,28 +398,7 @@ func syncPeersRoutes(peers []wgtypes.PeerConfig, replace bool) {
 		pbrTrackedRoutes.Lock()
 		for oldSubnet := range pbrTrackedRoutes.routes {
 			if _, exists := newAllowed[oldSubnet]; !exists {
-				isLocalNodeAddr := false
-				for _, node := range config.GetNodes() {
-					netRange := node.NetworkRange
-					if netRange.IP == nil && node.Address.Mask != nil {
-						netRange = net.IPNet{
-							IP:   node.Address.IP.Mask(node.Address.Mask),
-							Mask: node.Address.Mask,
-						}
-					}
-					netRange6 := node.NetworkRange6
-					if netRange6.IP == nil && node.Address6.Mask != nil {
-						netRange6 = net.IPNet{
-							IP:   node.Address6.IP.Mask(node.Address6.Mask),
-							Mask: node.Address6.Mask,
-						}
-					}
-					if netRange.String() == oldSubnet || netRange6.String() == oldSubnet {
-						isLocalNodeAddr = true
-						break
-					}
-				}
-				if !isLocalNodeAddr {
+				if !isLocalNodeSubnet(oldSubnet) {
 					RemovePBRRoute(oldSubnet, ifaceName)
 				}
 			}
