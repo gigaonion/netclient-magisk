@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/gravitl/netclient/cache"
 	"github.com/gravitl/netclient/config"
 	"github.com/gravitl/netclient/ncutils"
 	"github.com/gravitl/netmaker/logger"
@@ -384,6 +385,21 @@ func isLocalNodeSubnet(subnet string) bool {
 	return false
 }
 
+func isEgressRoute(subnet string) bool {
+	host := config.Netclient()
+	if host == nil {
+		return false
+	}
+	if addrs, ok := cache.EgressRouteCache.Load(host.Host.ID.String()); ok && addrs != nil {
+		for _, addr := range addrs.([]ifaceAddress) {
+			if addr.Network.String() == subnet {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func syncPeersRoutes(peers []wgtypes.PeerConfig, replace bool) {
 	ifaceName := ncutils.GetInterfaceName()
 	if replace {
@@ -398,7 +414,7 @@ func syncPeersRoutes(peers []wgtypes.PeerConfig, replace bool) {
 		pbrTrackedRoutes.Lock()
 		for oldSubnet := range pbrTrackedRoutes.routes {
 			if _, exists := newAllowed[oldSubnet]; !exists {
-				if !isLocalNodeSubnet(oldSubnet) {
+				if !isLocalNodeSubnet(oldSubnet) && !isEgressRoute(oldSubnet) {
 					RemovePBRRoute(oldSubnet, ifaceName)
 				}
 			}
