@@ -120,6 +120,7 @@ func Checkin(ctx context.Context, wg *sync.WaitGroup) {
 			}
 			go callPublishMetrics(true)
 		case <-checkinTicker.C:
+			_ = ncutils.RotateLogFile("", 0, 0)
 			if config.CurrServer == "" {
 				continue
 			}

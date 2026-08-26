@@ -43,6 +43,15 @@ if [ -f /data/adb/netclient/netclient.pid ]; then
         kill -9 "$OLD_PID" 2>/dev/null || true
     fi
     rm -f /data/adb/netclient/netclient.pid
+# Rotate log file if > 2MB
+LOG_FILE="/data/adb/netclient/netclient.log"
+if [ -f "$LOG_FILE" ]; then
+    LOG_SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$LOG_SIZE" -gt 2097152 ]; then
+        mv -f "${LOG_FILE}.1" "${LOG_FILE}.2" 2>/dev/null || true
+        cp -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || true
+        : > "$LOG_FILE"
+    fi
 fi
 
 # Start netclient daemon in background

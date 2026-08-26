@@ -63,6 +63,7 @@ type cachedMessage struct {
 // Daemon runs netclient daemon
 func Daemon() {
 	slog.Info("starting netclient daemon", "version", config.Version)
+	_ = ncutils.RotateLogFile("", 0, 0)
 	daemon.SetDaemonMode()
 	daemon.RemoveAllLockFiles()
 	if err := ncutils.SavePID(); err != nil {
@@ -96,6 +97,7 @@ func Daemon() {
 			return
 		case <-reset:
 			slog.Info("received reset")
+			_ = ncutils.RotateLogFile("", 0, 0)
 			dns.GetDNSServerInstance().Stop()
 			_ = flow.GetManager().Stop()
 			config.FwClose()
