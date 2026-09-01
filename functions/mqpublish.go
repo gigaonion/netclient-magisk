@@ -409,6 +409,40 @@ func UpdateHostSettings(fallback bool) error {
 	if server == nil {
 		return errors.New("server config is nil")
 	}
+	defaultInterface, err := getDefaultInterface()
+	if err != nil {
+		logger.Log(0, "default gateway not found", err.Error())
+	} else {
+		if defaultInterface != config.Netclient().DefaultInterface &&
+			defaultInterface != ncutils.GetInterfaceName() {
+			publishMsg = true
+			config.Netclient().DefaultInterface = defaultInterface
+			logger.Log(0, "default interface has changed to", defaultInterface)
+			// Network interface changed: immediately query STUN to refresh public IP and port
+			if !config.Netclient().IsStatic {
+				listenPort := config.Netclient().ListenPort
+				ip4, port4, natType4 := holePunchWgPort(4, listenPort)
+				ip6, port6, natType6 := holePunchWgPort(6, listenPort)
+				if ip4 != nil && ip4.To4() != nil && !ip4.IsUnspecified() {
+					config.HostPublicIP = ip4
+				}
+				if ip6 != nil && ip6.To4() == nil && !ip6.IsUnspecified() {
+					config.HostPublicIP6 = ip6
+				}
+				if natType4 != "" {
+					config.HostNatType = natType4
+				} else if natType6 != "" {
+					config.HostNatType = natType6
+				}
+				if port4 != 0 && !config.Netclient().IsStaticPort {
+					config.WgPublicListenPort = port4
+				} else if port6 != 0 && !config.Netclient().IsStaticPort {
+					config.WgPublicListenPort = port6
+				}
+			}
+		}
+	}
+
 	if !config.Netclient().IsStatic {
 		if config.HostPublicIP != nil && !config.HostPublicIP.IsUnspecified() {
 			if !config.Netclient().EndpointIP.Equal(config.HostPublicIP) {
@@ -470,17 +504,6 @@ func UpdateHostSettings(fallback bool) error {
 				config.Netclient().Interfaces = ip
 				publishMsg = true
 			}
-		}
-	}
-	defaultInterface, err := getDefaultInterface()
-	if err != nil {
-		logger.Log(0, "default gateway not found", err.Error())
-	} else {
-		if defaultInterface != config.Netclient().DefaultInterface &&
-			defaultInterface != ncutils.GetInterfaceName() {
-			publishMsg = true
-			config.Netclient().DefaultInterface = defaultInterface
-			logger.Log(0, "default interface has changed to", defaultInterface)
 		}
 	}
 	if config.FirewallHasChanged() {

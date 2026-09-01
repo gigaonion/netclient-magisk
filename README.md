@@ -61,6 +61,7 @@ su -c /data/adb/modules/netclient-magisk/action.sh
 
 本プロジェクトは[Gravitl / Netclient](https://github.com/gravitl/netclient)（Copyright Gravitl, Inc.）をフォーク・改変したものであり，Apache License 2.0のライセンス条項に基づき，Android環境向けにソースコードおよびネットワーク制御機構の変更を行っています．改変内容の詳細はコミット履歴をご参照ください．
 
+
 ### 謝辞
 本プロジェクトは以下のオープンソースソフトウェアを利用・改変して作成されています．
 - [Gravitl / Netclient](https://github.com/gravitl/netclient) - Gravitl, Inc.
