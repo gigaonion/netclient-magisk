@@ -114,8 +114,8 @@ func versionLessThan(v1, v2 string) (bool, error) {
 
 // UseVersion switches the current netclient version to the one specified if available in the github releases page
 func UseVersion(version string, rebootDaemon bool) (skip bool, err error) {
-	if IsContainerized() {
-		slog.Warn("skipping auto-upgrade inside container, update the container image instead", "version", version)
+	if IsContainerized() || runtime.GOOS == "linux" {
+		slog.Warn("skipping auto-upgrade on managed/Android client; update via Magisk module", "version", version)
 		return true, nil
 	}
 	// Use Windows specific version change process

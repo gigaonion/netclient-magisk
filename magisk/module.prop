@@ -1,6 +1,6 @@
 id=netclient-magisk
 name=Netmaker Client
-version=v1.6.0-2
-versionCode=10602
+version=v1.7.0-1
+versionCode=10701
 author=gigaonion
 description=カーネル空間で動作するNetmakerクライアント
